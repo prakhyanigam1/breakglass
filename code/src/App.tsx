@@ -8,6 +8,22 @@ const SEVERITIES = ['low', 'medium', 'high', 'critical'];
 const STATUSES = ['open', 'investigating', 'contained', 'resolved'];
 const SCOPE_STATUSES = ['exfiltrated', 'encrypted', 'unknown', 'contained'];
 
+// UI-only copy for the guided "open incident" flow.
+const INCIDENT_TYPES = [
+  { label: 'Ransomware', title: 'Ransomware' },
+  { label: 'Data leak', title: 'Data leak' },
+  { label: 'Account takeover', title: 'Account takeover' },
+  { label: 'Phishing', title: 'Phishing' },
+  { label: 'Lost device', title: 'Lost device' },
+  { label: 'Not sure yet', title: 'Suspicious activity' },
+];
+const SEVERITY_HINTS: Record<string, string> = {
+  low: 'One person affected',
+  medium: 'Work is slowed down',
+  high: 'A team or system down',
+  critical: 'Business stopped or data stolen',
+};
+
 // ---------- Small helpers ----------
 
 function ms(ts: Timestamp) {
@@ -22,6 +38,22 @@ function dateTimeOf(ts: Timestamp) {
 function errorText(err: unknown) {
   const raw = err instanceof Error ? err.message : String(err);
   return raw.replace(/^.*SenderError:\s*/, '');
+}
+function incLabel(id: bigint) {
+  return `INC-${id.toString().padStart(4, '0')}`;
+}
+function elapsed(fromMs: number, nowMs: number) {
+  const s = Math.max(0, Math.floor((nowMs - fromMs) / 1000));
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+function useNow(intervalMs = 1000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }
 
 // Runs a reducer call and shows any error in a toast instead of crashing.
@@ -46,6 +78,35 @@ function useAction() {
 
 type Run = ReturnType<typeof useAction>['run'];
 
+// ---------- Icons ----------
+
+function Logo({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="logo">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M8 8l3 4-2 1 4 3" />
+    </svg>
+  );
+}
+
+function WarningIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 9v4M12 17h.01" />
+      <path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" />
+    </svg>
+  );
+}
+
+function Brand({ size = 'md' }: { size?: 'md' | 'lg' }) {
+  return (
+    <span className={`brand brand-${size}`}>
+      <Logo size={size === 'lg' ? 36 : 28} />
+      <span>Breakglass</span>
+    </span>
+  );
+}
+
 // ---------- App ----------
 
 export default function App() {
@@ -58,15 +119,15 @@ export default function App() {
   if (conn.connectionError) {
     body = (
       <Center>
-        <h1 className="brand">Breakglass</h1>
+        <Brand size="lg" />
         <p className="muted">Can't reach the war room server. Check that SpacetimeDB is running and the address is right.</p>
-        <code className="small">{import.meta.env.VITE_SPACETIME_URI ?? 'ws://localhost:3000'}</code>
+        <code className="mono small">{import.meta.env.VITE_SPACETIME_URI ?? 'ws://localhost:3000'}</code>
       </Center>
     );
   } else if (!conn.isActive || !profileReady) {
     body = (
       <Center>
-        <h1 className="brand">Breakglass</h1>
+        <Brand size="lg" />
         <p className="muted">Connecting…</p>
       </Center>
     );
@@ -75,6 +136,7 @@ export default function App() {
   } else if (me.role === 'worker') {
     body = (
       <Center>
+        <Brand size="lg" />
         <p className="muted">This browser is signed in as the alert bot. Use a different browser to join as a person.</p>
       </Center>
     );
@@ -97,7 +159,7 @@ export default function App() {
 function Center({ children }: { children: ReactNode }) {
   return (
     <div className="center">
-      <div className="center-card">{children}</div>
+      <div className="center-col">{children}</div>
     </div>
   );
 }
@@ -126,15 +188,18 @@ function JoinScreen({ run }: { run: Run }) {
 
   return (
     <Center>
-      <h1 className="brand">Breakglass</h1>
-      <p className="muted">
-        {mode === 'join'
-          ? 'Out-of-band war room. Enter the one-time code your admin gave you.'
-          : 'First-time setup. The first person to do this becomes the admin.'}
-      </p>
+      <Brand size="lg" />
+      <div className="stack-sm">
+        <h1 className="display-md">{mode === 'join' ? 'Sign in' : 'First-time setup'}</h1>
+        <p className="lede">
+          {mode === 'join'
+            ? 'Out-of-band war room. We never use your company login: if your network is compromised, so is SSO. Enter the one-time code your admin gave you.'
+            : 'The first person to do this becomes the admin. You can invite the rest of the team after.'}
+        </p>
+      </div>
       <form className="stack" onSubmit={submit}>
         {mode === 'join' && (
-          <label>
+          <label className="field">
             Invite code
             <input
               value={code}
@@ -142,35 +207,39 @@ function JoinScreen({ run }: { run: Run }) {
               placeholder="XXXXXXXX"
               autoFocus
               required
-              className="mono"
+              className="input-lg mono code-input"
             />
           </label>
         )}
-        <label>
+        <label className="field">
           Your name
-          <input value={name} onChange={e => setName(e.target.value)} required maxLength={60} autoFocus={mode === 'setup'} />
+          <input className="input-lg" value={name} onChange={e => setName(e.target.value)} required maxLength={60} autoFocus={mode === 'setup'} />
         </label>
-        <label>
-          Phone for alerts <span className="muted">(optional, never shown to others)</span>
-          <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+15551234567" type="tel" />
+        <label className="field">
+          Phone for alerts <span className="muted normal">(optional, never shown to others)</span>
+          <input className="input-lg" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+15551234567" type="tel" />
         </label>
-        <button className="primary" disabled={busy}>
-          {mode === 'join' ? 'Join the war room' : 'Become admin'}
+        <button className="btn btn-primary btn-lg" disabled={busy}>
+          {mode === 'join' ? 'Enter Breakglass' : 'Become admin'}
         </button>
       </form>
-      <button className="link" onClick={() => setMode(mode === 'join' ? 'setup' : 'join')}>
-        {mode === 'join' ? 'Setting this up for the first time?' : 'I have an invite code'}
-      </button>
+      <div className="note">
+        {mode === 'join' ? 'Not on the list? Only your admin can add responders. ' : 'Already have a code? '}
+        <button className="link" onClick={() => setMode(mode === 'join' ? 'setup' : 'join')}>
+          {mode === 'join' ? 'Setting this up for the first time?' : 'I have an invite code'}
+        </button>
+      </div>
     </Center>
   );
 }
 
-// ---------- Main war room ----------
+// ---------- Main shell ----------
 
 function WarRoom({ meName, isAdmin, run }: { meName: string; isAdmin: boolean; run: Run }) {
   const [incidents] = useTable(tables.incidentsFeed);
+  const [team] = useTable(tables.team);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
-  const [panel, setPanel] = useState<'incident' | 'new' | 'team'>('incident');
+  const [panel, setPanel] = useState<'home' | 'incident' | 'new' | 'team'>('home');
 
   const sorted = useMemo(() => {
     const active = (i: Incident) => (i.status === 'resolved' ? 1 : 0);
@@ -179,69 +248,182 @@ function WarRoom({ meName, isAdmin, run }: { meName: string; isAdmin: boolean; r
 
   const selected = sorted.find(i => i.id === selectedId) ?? sorted.find(i => i.status !== 'resolved') ?? sorted[0];
 
+  const people = team.filter(p => p.role !== 'worker');
+  const onlineCount = people.filter(p => p.online).length;
+
   function pick(id: bigint) {
     setSelectedId(id);
     setPanel('incident');
   }
 
-  return (
-    <div className="layout">
-      <aside className="sidebar">
-        <div className="sidebar-head">
-          <span className="brand small-brand">Breakglass</span>
-          <span className="muted small">{meName}{isAdmin ? ' · admin' : ''}</span>
-        </div>
-        <button className="primary block" onClick={() => setPanel('new')}>
-          + Open incident
-        </button>
-        <nav className="incident-list">
-          {sorted.length === 0 && <p className="muted small pad">No incidents. Quiet is good.</p>}
-          {sorted.map(i => (
-            <button
-              key={i.id.toString()}
-              className={`incident-item ${panel === 'incident' && selected?.id === i.id ? 'active' : ''} ${i.status === 'resolved' ? 'resolved' : ''}`}
-              onClick={() => pick(i.id)}
-            >
-              <span className={`sev-dot sev-${i.severity}`} />
-              <span className="incident-item-text">
-                <span className="incident-item-title">{i.title}</span>
-                <span className="muted small">
-                  {i.status} · {dateTimeOf(i.createdAt)}
-                </span>
-              </span>
-            </button>
-          ))}
-        </nav>
-        <button className={`ghost block ${panel === 'team' ? 'active' : ''}`} onClick={() => setPanel('team')}>
-          Team{isAdmin ? ' & invites' : ''}
-        </button>
-      </aside>
+  if (panel === 'new') {
+    return <NewIncident run={run} onCancel={() => setPanel('home')} onCreated={() => { setSelectedId(null); setPanel('incident'); }} />;
+  }
 
-      <main className="main">
-        {panel === 'new' && <NewIncident run={run} onCreated={() => { setSelectedId(null); setPanel('incident'); }} />}
-        {panel === 'team' && <TeamPanel isAdmin={isAdmin} run={run} />}
-        {panel === 'incident' &&
-          (selected ? (
-            <IncidentView key={selected.id.toString()} incident={selected} run={run} />
-          ) : (
-            <div className="empty">
-              <h2>All clear</h2>
-              <p className="muted">When something goes wrong, open an incident. Everyone with a phone on file gets a text.</p>
-            </div>
-          ))}
-      </main>
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="topbar-left">
+          <span className="brand-group">
+            <button className="brand-btn" onClick={() => setPanel('home')} aria-label="Breakglass home">
+              <Brand />
+            </button>
+            <span className="env-chip">isolated · self-hosted</span>
+          </span>
+          <nav className="nav">
+            <button className={`nav-link ${panel === 'home' || panel === 'incident' ? 'on' : ''}`} onClick={() => setPanel('home')}>
+              Incidents
+            </button>
+            <button className={`nav-link ${panel === 'team' ? 'on' : ''}`} onClick={() => setPanel('team')}>
+              {isAdmin ? 'Responders & invites' : 'Responders'}
+            </button>
+          </nav>
+        </div>
+        <div className="topbar-right">
+          <span className="presence-line">
+            <span className={`dot ${onlineCount > 0 ? 'dot-ok' : ''}`} />
+            {onlineCount} of {people.length} responders online
+          </span>
+          <span className="whoami">{meName}{isAdmin ? ' · Admin' : ''}</span>
+        </div>
+      </header>
+
+      {panel === 'home' && <Home incidents={sorted} peopleCount={people.length} onlineCount={onlineCount} onBreak={() => setPanel('new')} onPick={pick} onTeam={() => setPanel('team')} />}
+      {panel === 'team' && <TeamPanel isAdmin={isAdmin} run={run} />}
+      {panel === 'incident' &&
+        (selected ? (
+          <IncidentView key={selected.id.toString()} incident={selected} run={run} onBack={() => setPanel('home')} />
+        ) : (
+          <Home incidents={sorted} peopleCount={people.length} onlineCount={onlineCount} onBreak={() => setPanel('new')} onPick={pick} onTeam={() => setPanel('team')} />
+        ))}
     </div>
   );
 }
 
-// ---------- New incident ----------
+// ---------- Home ----------
 
-function NewIncident({ run, onCreated }: { run: Run; onCreated: () => void }) {
+function Home(props: {
+  incidents: Incident[];
+  peopleCount: number;
+  onlineCount: number;
+  onBreak: () => void;
+  onPick: (id: bigint) => void;
+  onTeam: () => void;
+}) {
+  const now = useNow();
+  const active = props.incidents.filter(i => i.status !== 'resolved');
+  const past = props.incidents.filter(i => i.status === 'resolved');
+
+  return (
+    <main className="page page-home">
+      {active.length === 0 ? (
+        <section className="empty-state">
+          <h1 className="display-lg">No active incidents</h1>
+          <p className="lede">
+            If something looks wrong, don't wait to be sure. Opening an incident texts the whole response team instantly.
+          </p>
+          <button className="btn btn-primary btn-glass" onClick={props.onBreak}>
+            <WarningIcon />
+            Break the glass
+          </button>
+        </section>
+      ) : (
+        <>
+          <section className="hero alarm">
+            <div className="hero-copy">
+              <h1 className="display-lg">Something wrong?</h1>
+              <p className="lede">
+                Opening an incident texts your whole response team instantly and gives everyone one place to work. When in doubt, break the glass.
+              </p>
+            </div>
+            <button className="btn btn-primary btn-glass" onClick={props.onBreak}>
+              <WarningIcon />
+              Break the glass
+            </button>
+          </section>
+
+          <section className="stack">
+            <h2 className="display-sm">Active incidents</h2>
+            {active.map(i => (
+            <button key={i.id.toString()} className="incident-card" onClick={() => props.onPick(i.id)}>
+              <span className="incident-card-main">
+                <span className="pill-row">
+                  <span className="mono muted small">{incLabel(i.id)}</span>
+                  <SeverityPill severity={i.severity} />
+                  <StatusPill status={i.status} />
+                </span>
+                <span className="incident-card-title">{i.title}</span>
+              </span>
+              <span className="incident-card-meta">
+                <span>Opened {dateTimeOf(i.createdAt)}</span>
+                <span className="mono accent-text">{elapsed(ms(i.createdAt), now)}</span>
+                <span className="accent-text strong">Open war room →</span>
+              </span>
+            </button>
+            ))}
+          </section>
+        </>
+      )}
+
+      <div className="split">
+        <section className="panel stack-sm">
+          <h2 className="display-xs">Team readiness</h2>
+          <div className="stats">
+            <div className="stat">
+              <span className="stat-num">{props.peopleCount}</span>
+              <span className="muted small">responders registered</span>
+            </div>
+            <div className="stat">
+              <span className={`stat-num ${props.onlineCount > 0 ? 'ok-text' : ''}`}>{props.onlineCount}/{props.peopleCount}</span>
+              <span className="muted small">online right now</span>
+            </div>
+          </div>
+          <button className="link align-start" onClick={props.onTeam}>Manage responders →</button>
+        </section>
+        <section className="panel stack-sm">
+          <h2 className="display-xs">Past incidents</h2>
+          {past.length === 0 ? (
+            <p className="muted small">Nothing resolved yet.</p>
+          ) : (
+            past.map(i => (
+              <button key={i.id.toString()} className="row-link" onClick={() => props.onPick(i.id)}>
+                <span>{incLabel(i.id)} · {i.title}</span>
+                <span className="ok-text">Resolved</span>
+              </button>
+            ))
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function SeverityPill({ severity }: { severity: string }) {
+  return <span className={`pill sev-${severity}`}>{severity}</span>;
+}
+function StatusPill({ status }: { status: string }) {
+  return <span className={`pill status-${status}`}>{status}</span>;
+}
+
+// ---------- New incident (guided, 4 steps) ----------
+
+function NewIncident({ run, onCreated, onCancel }: { run: Run; onCreated: () => void; onCancel: () => void }) {
   const openIncident = useReducer(reducers.openIncident);
+  const [team] = useTable(tables.team);
   const [title, setTitle] = useState('');
+  const [kind, setKind] = useState<string | null>(null);
   const [severity, setSeverity] = useState('high');
   const [systems, setSystems] = useState('');
   const [busy, setBusy] = useState(false);
+
+  const people = team.filter(p => p.role !== 'worker').sort((a, b) => a.name.localeCompare(b.name));
+
+  function pickKind(label: string, prefill: string) {
+    // Prefill the title from the type, unless the user already typed their own.
+    const prev = INCIDENT_TYPES.find(t => t.label === kind)?.title ?? '';
+    if (!title.trim() || title === prev) setTitle(prefill);
+    setKind(label);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -252,80 +434,161 @@ function NewIncident({ run, onCreated }: { run: Run; onCreated: () => void }) {
   }
 
   return (
-    <section className="card narrow">
-      <h2>Open an incident</h2>
-      <p className="muted">This texts every responder right away.</p>
-      <form className="stack" onSubmit={submit}>
-        <label>
-          What's happening?
-          <input value={title} onChange={e => setTitle(e.target.value)} required maxLength={120} autoFocus placeholder="Ransom note on file server" />
-        </label>
-        <label>
-          Severity
-          <div className="seg">
-            {SEVERITIES.map(s => (
-              <button type="button" key={s} className={`seg-btn ${severity === s ? `on sev-bg-${s}` : ''}`} onClick={() => setSeverity(s)}>
-                {s}
-              </button>
-            ))}
-          </div>
-        </label>
-        <label>
-          Affected systems <span className="muted">(comma-separated)</span>
-          <input value={systems} onChange={e => setSystems(e.target.value)} placeholder="Email, Payroll, VPN" />
-        </label>
-        <button className="danger" disabled={busy}>Open incident and alert team</button>
-      </form>
-    </section>
+    <div className="app">
+      <header className="topbar">
+        <button className="link muted-link" onClick={onCancel}>← Cancel</button>
+        <span className="display-xs">Open an incident</span>
+        <span className="muted small">Takes 30 seconds</span>
+      </header>
+      <main className="page page-narrow">
+        <form className="steps" onSubmit={submit}>
+          <section className="step">
+            <h2 className="step-title">1. What's happening?</h2>
+            <div className="choice-grid">
+              {INCIDENT_TYPES.map(t => (
+                <button
+                  type="button"
+                  key={t.label}
+                  className={`choice ${kind === t.label ? 'on' : ''}`}
+                  aria-pressed={kind === t.label}
+                  onClick={() => pickKind(t.label, t.title)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <label className="field">
+              <span className="muted normal">In a few words</span>
+              <input
+                className="input-lg"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                required
+                maxLength={120}
+                autoFocus
+                placeholder="Ransom note on file server"
+              />
+            </label>
+          </section>
+
+          <section className="step">
+            <h2 className="step-title">2. How bad is it?</h2>
+            <div className="choice-grid choice-grid-4">
+              {SEVERITIES.map(s => (
+                <button
+                  type="button"
+                  key={s}
+                  className={`choice choice-tall ${severity === s ? `on on-${s}` : ''}`}
+                  aria-pressed={severity === s}
+                  onClick={() => setSeverity(s)}
+                >
+                  <span className="choice-label">{s}</span>
+                  <span className="choice-hint">{SEVERITY_HINTS[s]}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="step">
+            <label className="field">
+              <span className="step-title">3. What's affected?</span>
+              <input className="input-lg" value={systems} onChange={e => setSystems(e.target.value)} placeholder="Email, Payroll, VPN" />
+            </label>
+            <span className="muted">Comma-separated. Best guess is fine, you can update this in the war room.</span>
+          </section>
+
+          <section className="step">
+            <h2 className="step-title">4. Who gets texted?</h2>
+            <p className="muted">Every responder with a phone on file gets a text the moment you open this.</p>
+            {people.length > 0 && (
+              <ul className="recipients">
+                {people.map(p => (
+                  <li key={p.identity.toHexString()}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M5 12l5 5L20 7" />
+                    </svg>
+                    <span>{p.name}</span>
+                    <span className="muted small">{p.role}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <button className="btn btn-primary btn-xl" disabled={busy}>
+            {busy ? 'Opening…' : 'Open incident & text the team'}
+          </button>
+        </form>
+      </main>
+    </div>
   );
 }
 
-// ---------- One incident ----------
+// ---------- One incident (war room) ----------
 
-function IncidentView({ incident, run }: { incident: Incident; run: Run }) {
+function IncidentView({ incident, run, onBack }: { incident: Incident; run: Run; onBack: () => void }) {
   const setStatus = useReducer(reducers.setIncidentStatus);
   const setSeverity = useReducer(reducers.setIncidentSeverity);
   const setNextAction = useReducer(reducers.setNextAction);
   const setAffected = useReducer(reducers.setAffectedSystems);
   const id = incident.id;
+  const now = useNow();
+  const resolved = incident.status === 'resolved';
 
   return (
-    <div className="incident">
+    <main className="page page-wide warroom">
+      <button className="link muted-link align-start" onClick={onBack}>← All incidents</button>
+
       <header className="incident-head">
-        <div>
-          <span className={`badge sev-bg-${incident.severity}`}>{incident.severity}</span>
-          <h1>{incident.title}</h1>
+        <div className="stack-sm">
+          <div className="pill-row">
+            <span className="mono muted">{incLabel(id)}</span>
+            <SeverityPill severity={incident.severity} />
+            <StatusPill status={incident.status} />
+          </div>
+          <h1 className="display-lg">{incident.title}</h1>
           <p className="muted small">Opened {dateTimeOf(incident.createdAt)} · updated {timeOf(incident.updatedAt)}</p>
         </div>
-        <div className="controls">
-          <label className="inline">
-            Status
-            <select value={incident.status} onChange={e => run(() => setStatus({ incidentId: id, status: e.target.value }))}>
-              {STATUSES.map(s => <option key={s}>{s}</option>)}
-            </select>
-          </label>
-          <label className="inline">
-            Severity
-            <select
-              value={incident.severity}
-              onChange={e => {
-                const next = e.target.value;
-                const raising = SEVERITIES.indexOf(next) > SEVERITIES.indexOf(incident.severity);
-                if (raising && !confirm(`Raise to ${next.toUpperCase()}? This texts everyone.`)) return;
-                run(() => setSeverity({ incidentId: id, severity: next }));
-              }}
-            >
-              {SEVERITIES.map(s => <option key={s}>{s}</option>)}
-            </select>
-          </label>
+        <div className="incident-head-right">
+          {!resolved && (
+            <>
+              <span className="muted small">Time since opened</span>
+              <span className="clock mono">{elapsed(ms(incident.createdAt), now)}</span>
+            </>
+          )}
+          <div className="controls">
+            <label className="select-field">
+              Status
+              <select value={incident.status} onChange={e => run(() => setStatus({ incidentId: id, status: e.target.value }))}>
+                {STATUSES.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </label>
+            <label className="select-field">
+              Severity
+              <select
+                value={incident.severity}
+                onChange={e => {
+                  const next = e.target.value;
+                  const raising = SEVERITIES.indexOf(next) > SEVERITIES.indexOf(incident.severity);
+                  if (raising && !confirm(`Raise to ${next.toUpperCase()}? This texts everyone.`)) return;
+                  run(() => setSeverity({ incidentId: id, severity: next }));
+                }}
+              >
+                {SEVERITIES.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </label>
+          </div>
         </div>
       </header>
 
       <EditableBlock
-        className="next-action"
-        label="Do this next"
+        className="next-action alarm"
+        label="Your next step"
         value={incident.nextAction}
         maxLength={200}
+        editLabel="Mark done"
+        editPlaceholder="What's the next step?"
+        startEmpty
         onSave={v => run(() => setNextAction({ incidentId: id, nextAction: v }))}
       />
 
@@ -345,13 +608,12 @@ function IncidentView({ incident, run }: { incident: Incident; run: Run }) {
         onSave={v => run(() => setAffected({ incidentId: id, affectedSystems: v }))}
       />
 
-      <ScopePanel incidentId={id} run={run} />
-
-      <div className="two-col">
+      <div className="three-col">
         <Timeline incidentId={id} run={run} />
+        <ScopePanel incidentId={id} run={run} />
         <Chat incidentId={id} run={run} />
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -363,6 +625,9 @@ function EditableBlock(props: {
   maxLength: number;
   render?: (v: string) => ReactNode;
   onSave: (v: string) => Promise<boolean>;
+  editLabel?: string;
+  editPlaceholder?: string;
+  startEmpty?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(props.value);
@@ -373,25 +638,28 @@ function EditableBlock(props: {
   }
 
   return (
-    <section className={`card ${props.className ?? ''}`}>
-      <div className="card-head">
-        <h3>{props.label}</h3>
-        {!editing && (
-          <button className="link" onClick={() => { setDraft(props.value); setEditing(true); }}>
-            Edit
-          </button>
+    <section className={`panel editable ${props.className ?? ''}`}>
+      <div className="editable-body">
+        <h3 className="eyebrow">{props.label}</h3>
+        {editing ? (
+          <form className="row" onSubmit={save}>
+            <input value={draft} onChange={e => setDraft(e.target.value)} autoFocus maxLength={props.maxLength} required={!props.allowEmpty} placeholder={props.editPlaceholder} aria-label={props.label} />
+            <button className="btn btn-primary">Save</button>
+            <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
+          </form>
+        ) : props.render ? (
+          props.render(props.value)
+        ) : (
+          <p className="editable-value">{props.value}</p>
         )}
       </div>
-      {editing ? (
-        <form className="row" onSubmit={save}>
-          <input value={draft} onChange={e => setDraft(e.target.value)} autoFocus maxLength={props.maxLength} required={!props.allowEmpty} />
-          <button className="primary">Save</button>
-          <button type="button" className="ghost" onClick={() => setEditing(false)}>Cancel</button>
-        </form>
-      ) : props.render ? (
-        props.render(props.value)
-      ) : (
-        <p className="big">{props.value}</p>
+      {!editing && (
+        <button
+          className={props.editLabel ? 'btn btn-primary' : 'btn btn-ghost'}
+          onClick={() => { setDraft(props.startEmpty ? '' : props.value); setEditing(true); }}
+        >
+          {props.editLabel ?? 'Edit'}
+        </button>
       )}
     </section>
   );
@@ -421,47 +689,43 @@ function ScopePanel({ incidentId, run }: { incidentId: bigint; run: Run }) {
   }
 
   return (
-    <section className="card">
-      <div className="card-head">
-        <h3>Data scope</h3>
-        <span className="muted small">What data was hit, and what happened to it</span>
+    <section className="panel column">
+      <div className="panel-head">
+        <h2 className="display-xs">Data scope</h2>
+        <span className="muted small">What data was hit</span>
       </div>
       {items.length > 0 && (
-        <table className="scope">
-          <thead>
-            <tr><th>Data</th><th>Status</th><th>Notes</th></tr>
-          </thead>
-          <tbody>
-            {items.map(item => (
-              <tr key={item.id.toString()}>
-                <td>{item.dataName}</td>
-                <td>
-                  <select
-                    className={`scope-${item.status}`}
-                    value={item.status}
-                    onChange={e => run(() => updateScope({ scopeItemId: item.id, status: e.target.value, notes: item.notes }))}
-                  >
-                    {SCOPE_STATUSES.map(s => <option key={s}>{s}</option>)}
-                  </select>
-                </td>
-                <td>
-                  <NotesCell
-                    value={item.notes}
-                    onSave={v => run(() => updateScope({ scopeItemId: item.id, status: item.status, notes: v }))}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul className="scope-list">
+          {items.map(item => (
+            <li key={item.id.toString()} className="scope-item">
+              <div className="scope-item-top">
+                <span>{item.dataName}</span>
+                <select
+                  aria-label={`Status of ${item.dataName}`}
+                  className={`scope-select scope-${item.status}`}
+                  value={item.status}
+                  onChange={e => run(() => updateScope({ scopeItemId: item.id, status: e.target.value, notes: item.notes }))}
+                >
+                  {SCOPE_STATUSES.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <NotesCell
+                value={item.notes}
+                onSave={v => run(() => updateScope({ scopeItemId: item.id, status: item.status, notes: v }))}
+              />
+            </li>
+          ))}
+        </ul>
       )}
-      <form className="row wrap" onSubmit={add}>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Client contracts share" required maxLength={120} />
-        <select value={status} onChange={e => setStatus(e.target.value)}>
-          {SCOPE_STATUSES.map(s => <option key={s}>{s}</option>)}
-        </select>
-        <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes (optional)" />
-        <button className="primary">Add</button>
+      <form className="scope-add" onSubmit={add}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Client contracts share" required maxLength={120} aria-label="Data name" />
+        <div className="row">
+          <select value={status} onChange={e => setStatus(e.target.value)} aria-label="Status">
+            {SCOPE_STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes (optional)" aria-label="Notes" />
+        </div>
+        <button className="btn btn-dashed">+ Add data</button>
       </form>
     </section>
   );
@@ -474,7 +738,8 @@ function NotesCell({ value, onSave }: { value: string; onSave: (v: string) => Pr
     <input
       className="cell-input"
       value={draft}
-      placeholder="—"
+      placeholder="Add a note…"
+      aria-label="Notes"
       onChange={e => setDraft(e.target.value)}
       onBlur={() => { if (draft.trim() !== value) onSave(draft.trim()); }}
       onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -499,21 +764,22 @@ function Timeline({ incidentId, run }: { incidentId: bigint; run: Run }) {
   }
 
   return (
-    <section className="card column">
-      <div className="card-head">
-        <h3>Timeline</h3>
-        <span className="muted small">Permanent record. Can't be edited.</span>
+    <section className="panel column">
+      <div className="panel-head">
+        <h2 className="display-xs">Timeline</h2>
+        <span className="muted small">Permanent. Can't be edited.</span>
       </div>
       <form className="row" onSubmit={add}>
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="Log what you did or found" maxLength={1000} required />
-        <button className="primary">Log</button>
+        <input value={text} onChange={e => setText(e.target.value)} placeholder="Log what you did or found" maxLength={1000} required aria-label="Timeline entry" />
+        <button className="btn btn-light">Log</button>
       </form>
       <ol className="timeline scroll">
         {entries.map(e => (
           <li key={e.id.toString()} className={e.authorName === 'System' || e.authorName === 'Alert bot' ? 'sys' : ''}>
             <span className="t-time mono">{timeOf(e.createdAt)}</span>
-            <span>
-              <strong>{e.authorName}</strong> {e.text}
+            <span className="t-body">
+              <span>{e.text}</span>
+              <span className="muted small">{e.authorName}</span>
             </span>
           </li>
         ))}
@@ -545,10 +811,10 @@ function Chat({ incidentId, run }: { incidentId: bigint; run: Run }) {
   }
 
   return (
-    <section className="card column">
-      <div className="card-head">
-        <h3>Chat</h3>
-        <span className="muted small">Off company email and Slack</span>
+    <section className="panel column">
+      <div className="panel-head">
+        <h2 className="display-xs">War room chat</h2>
+        <span className="ok-text small">● live</span>
       </div>
       <div className="chat scroll">
         {messages.length === 0 && <p className="muted small">No messages yet.</p>}
@@ -564,8 +830,8 @@ function Chat({ incidentId, run }: { incidentId: bigint; run: Run }) {
         <div ref={bottom} />
       </div>
       <form className="row" onSubmit={send}>
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="Message the team" maxLength={2000} />
-        <button className="primary">Send</button>
+        <input value={text} onChange={e => setText(e.target.value)} placeholder="Message the war room" maxLength={2000} aria-label="Message" />
+        <button className="btn btn-light">Send</button>
       </form>
     </section>
   );
@@ -591,51 +857,62 @@ function TeamPanel({ isAdmin, run }: { isAdmin: boolean; run: Run }) {
   }
 
   return (
-    <div className="stack wide">
-      <section className="card">
-        <h2>Team</h2>
-        <ul className="team">
+    <main className="page page-mid">
+      <div className="stack-sm">
+        <h1 className="display-lg">Responders</h1>
+        <p className="muted">Only people on this list can see incidents. Set this up before you need it.</p>
+      </div>
+
+      <section className="panel flush">
+        <div className="table-wrap">
+          <div className="t-row t-head">
+            <span>Name</span><span>Status</span><span>Access</span><span />
+          </div>
           {people.map(p => {
             const isMe = identity ? p.identity.isEqual(identity) : false;
             return (
-              <li key={p.identity.toHexString()}>
-                <span className={`presence ${p.online ? 'on' : ''}`} title={p.online ? 'online' : 'offline'} />
-                <span className="grow">
-                  {p.name} {isMe && <span className="muted">(you)</span>}
+              <div className="t-row" key={p.identity.toHexString()}>
+                <span className="strong">
+                  {p.name} {isMe && <span className="muted normal">(you)</span>}
                 </span>
-                <span className="muted small">{p.role === 'worker' ? 'alert bot' : p.role}</span>
-                {isAdmin && !isMe && (
-                  <button
-                    className="ghost danger-text small"
-                    onClick={() => {
-                      if (confirm(`Remove ${p.name}? They lose access immediately.`)) run(() => removeResponder({ identity: p.identity }));
-                    }}
-                  >
-                    Remove
-                  </button>
-                )}
-              </li>
+                <span className={p.online ? 'ok-text' : 'muted'}>
+                  <span className={`dot ${p.online ? 'dot-ok' : ''}`} /> {p.online ? 'Online' : 'Offline'}
+                </span>
+                <span className="cap">{p.role === 'worker' ? 'alert bot' : p.role}</span>
+                <span className="t-actions">
+                  {isAdmin && !isMe && (
+                    <button
+                      className="btn btn-ghost btn-sm danger-text"
+                      onClick={() => {
+                        if (confirm(`Remove ${p.name}? They lose access immediately.`)) run(() => removeResponder({ identity: p.identity }));
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </span>
+              </div>
             );
           })}
-        </ul>
+        </div>
       </section>
 
-      <section className="card">
-        <h3>My alert phone</h3>
+      <section className="panel stack-sm">
+        <h2 className="display-xs">My alert phone</h2>
         <p className="muted small">Where incident texts go. Leave empty and save to stop texts.</p>
         <form className="row" onSubmit={savePhone}>
-          <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+15551234567" type="tel" />
-          <button className="primary">Save</button>
+          <input className="input-lg" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+15551234567" type="tel" aria-label="Alert phone" />
+          <button className="btn btn-primary btn-lg">Save</button>
         </form>
       </section>
 
       {isAdmin && (
-        <section className="card">
-          <div className="card-head">
-            <h3>Invite codes</h3>
+        <section className="panel stack-sm">
+          <div className="panel-head">
+            <h2 className="display-xs">Invite codes</h2>
             <div className="row">
-              <button className="primary" onClick={() => run(() => createInvite({ role: 'responder' }))}>New responder code</button>
-              <button className="ghost" onClick={() => run(() => createInvite({ role: 'worker' }))}>New alert-bot code</button>
+              <button className="btn btn-primary" onClick={() => run(() => createInvite({ role: 'responder' }))}>New responder code</button>
+              <button className="btn btn-ghost" onClick={() => run(() => createInvite({ role: 'worker' }))}>New alert-bot code</button>
             </div>
           </div>
           <p className="muted small">Each code works once. Share it over a channel you trust (in person, phone call).</p>
@@ -654,6 +931,8 @@ function TeamPanel({ isAdmin, run }: { isAdmin: boolean; run: Run }) {
           )}
         </section>
       )}
-    </div>
+
+      <div className="note">Use personal phones, not company devices. If an attacker controls company email and phones, they shouldn't be able to reach this list.</div>
+    </main>
   );
 }
